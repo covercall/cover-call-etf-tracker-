@@ -12,12 +12,7 @@ import plotly.express as px
 DATA_FILE = "portfolio_data.json"
 DEFAULT_ETFS = ["QQQI", "SPYI", "XSPI", "XQQI", "BTCI", "XBCI", "GIAX", "BLOX", "MLPI", "SLJY", "IAUI"]
 
-st.set_page_config(
-    page_title="Covered Call ETF Tracker",
-    page_icon="📈",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+st.set_page_config(page_title="Covered Call ETF Tracker", page_icon="📈", layout="wide", initial_sidebar_state="expanded")
 
 # ======================
 # THEME
@@ -34,40 +29,23 @@ def apply_theme():
         h1, h2, h3, h4, h5, h6 { color: #ffffff !important; }
         [data-testid="stMetricValue"] { color: #ffffff !important; }
         [data-testid="stMetricLabel"] { color: #cccccc !important; }
-        .stSelectbox div[data-baseweb="select"] > div {
-            background-color: #21262d !important;
-            color: #ffffff !important;
-        }
+        .stSelectbox div[data-baseweb="select"] > div { background-color: #21262d !important; color: #ffffff !important; }
         .stSelectbox div[data-baseweb="select"] span { color: #ffffff !important; }
-        .stTextInput > div > div > input,
-        .stNumberInput > div > div > input,
-        .stDateInput > div > div > input {
-            background-color: #21262d !important;
-            color: #ffffff !important;
+        .stTextInput > div > div > input, .stNumberInput > div > div > input, .stDateInput > div > div > input {
+            background-color: #21262d !important; color: #ffffff !important;
         }
-        .stButton > button {
-            background-color: #238636;
-            color: white;
-            border: none;
-        }
-        .stButton > button:hover {
-            background-color: #2ea043;
-            color: white;
-        }
+        .stButton > button { background-color: #238636; color: white; border: none; }
+        .stButton > button:hover { background-color: #2ea043; color: white; }
         p, span, label, div { color: #e6edf3 !important; }
         </style>
         """, unsafe_allow_html=True)
     else:
-        st.markdown("""
-        <style>
-        .stApp { background-color: #ffffff; color: #1f2328; }
-        </style>
-        """, unsafe_allow_html=True)
+        st.markdown("""<style>.stApp { background-color: #ffffff; color: #1f2328; }</style>""", unsafe_allow_html=True)
 
 apply_theme()
 
 # ======================
-# DATA FUNCTIONS
+# DATA
 # ======================
 def load_data():
     if os.path.exists(DATA_FILE):
@@ -76,12 +54,7 @@ def load_data():
                 return json.load(f)
         except:
             pass
-    return {
-        "transactions": [],
-        "distributions": [],
-        "cash": 0.0,
-        "etfs": DEFAULT_ETFS.copy()
-    }
+    return {"transactions": [], "distributions": [], "cash": 0.0, "etfs": DEFAULT_ETFS.copy()}
 
 def save_data(data):
     with open(DATA_FILE, "w") as f:
@@ -92,7 +65,7 @@ def get_current_price(ticker):
         t = yf.Ticker(ticker)
         hist = t.history(period="5d")
         if not hist.empty:
-            return round(float(hist["Close"].iloc[-1]), 4)
+            return round(float(hist["Close"].iloc[-1]), 2)
     except:
         pass
     return None
@@ -102,9 +75,7 @@ def get_last_dividend(ticker):
         t = yf.Ticker(ticker)
         dividends = t.dividends
         if not dividends.empty:
-            last_date = dividends.index[-1].strftime("%Y-%m-%d")
-            last_amount = round(float(dividends.iloc[-1]), 4)
-            return last_date, last_amount
+            return dividends.index[-1].strftime("%Y-%m-%d"), round(float(dividends.iloc[-1]), 4)
     except:
         pass
     return None, None
@@ -123,47 +94,40 @@ def calculate_position(ticker, data):
 
     roc_total = sum(float(d.get("roc_amount", 0)) for d in data["distributions"] if d.get("ticker") == ticker)
     adjusted_cost = max(total_cost - roc_total, 0)
-    avg_cost = adjusted_cost / total_shares if total_shares > 0 else 0
+    avg_cost = total_cost / total_shares if total_shares > 0 else 0
 
     return {
         "shares": round(total_shares, 4),
         "total_cost": round(total_cost, 2),
         "adjusted_cost": round(adjusted_cost, 2),
-        "avg_cost": round(avg_cost, 4),
+        "avg_cost": round(avg_cost, 2),
         "roc_total": round(roc_total, 2)
     }
 
-# ======================
-# LOAD DATA
-# ======================
 data = load_data()
 
 # ======================
 # SIDEBAR
 # ======================
 st.sidebar.title("📊 ETF Tracker")
-
 theme_choice = st.sidebar.radio("Theme", ["Dark", "Light"], index=0 if st.session_state.theme == "Dark" else 1)
 if theme_choice != st.session_state.theme:
     st.session_state.theme = theme_choice
     st.rerun()
 
-page = st.sidebar.radio(
-    "Menu",
-    [
-        "🏠 Portfolio Overview",
-        "➕ Add / Edit Positions",
-        "📥 Enter / Edit ROC",
-        "🔍 Ticker Details",
-        "📅 Dividend Calendar",
-        "📈 Charts & Projection",
-        "💰 Cash",
-        "💾 Backup / Restore",
-        "📰 News",
-        "⚙️ Manage ETFs",
-        "📄 Reports"
-    ]
-)
+page = st.sidebar.radio("Menu", [
+    "🏠 Portfolio Overview",
+    "➕ Add / Edit Positions",
+    "📥 Enter / Edit ROC",
+    "🔍 Ticker Details",
+    "📅 Dividend Calendar",
+    "📈 Charts & Projection",
+    "💰 Cash",
+    "💾 Backup / Restore",
+    "📰 News",
+    "⚙️ Manage ETFs",
+    "📄 Reports"
+])
 
 if st.sidebar.button("🔄 Refresh Prices"):
     st.rerun()
@@ -176,13 +140,16 @@ if page == "🏠 Portfolio Overview":
 
     overview_rows = []
     total_market_value = 0.0
+    total_cost_sum = 0.0
     total_adjusted_cost = 0.0
     total_income = 0.0
 
     for ticker in sorted(data["etfs"]):
         pos = calculate_position(ticker, data)
-        price = get_current_price(ticker) or 0.0
+        if pos["shares"] <= 0:
+            continue
 
+        price = get_current_price(ticker) or 0.0
         market_value = pos["shares"] * price
         pnl = market_value - pos["adjusted_cost"]
         pnl_pct = (pnl / pos["adjusted_cost"] * 100) if pos["adjusted_cost"] != 0 else 0.0
@@ -193,19 +160,21 @@ if page == "🏠 Portfolio Overview":
         )
 
         overview_rows.append({
-            "Ticker": ticker,
-            "Shares": f"{pos['shares']:.4f}",
-            "Avg Cost": f"{pos['avg_cost']:.4f}",
-            "Price": f"{price:.4f}" if price else "—",
+            "Ticker": f"${ticker}",
+            "Shares": f"{pos['shares']:.1f}",
+            "Avg Cost": f"{pos['avg_cost']:.2f}",
+            "Market Price": f"{price:.2f}" if price else "—",
+            "Total Cost": round(pos["total_cost"], 2),
             "Market Value": round(market_value, 2),
             "Adjusted Cost": pos["adjusted_cost"],
             "P&L $": round(pnl, 2),
             "P&L %": f"{pnl_pct:.2f}%",
             "ROC Applied": pos["roc_total"],
-            "Income Received": round(income, 2)
+            "Income": round(income, 2)
         })
 
         total_market_value += market_value
+        total_cost_sum += pos["total_cost"]
         total_adjusted_cost += pos["adjusted_cost"]
         total_income += income
 
@@ -215,12 +184,9 @@ if page == "🏠 Portfolio Overview":
         styles = [""] * len(row)
         try:
             pnl_val = float(str(row["P&L $"]).replace(",", ""))
-            if pnl_val > 0:
-                styles[df.columns.get_loc("P&L $")] = "color: #3fb950; font-weight: bold"
-                styles[df.columns.get_loc("P&L %")] = "color: #3fb950; font-weight: bold"
-            elif pnl_val < 0:
-                styles[df.columns.get_loc("P&L $")] = "color: #f85149; font-weight: bold"
-                styles[df.columns.get_loc("P&L %")] = "color: #f85149; font-weight: bold"
+            color = "color: #3fb950; font-weight: bold" if pnl_val > 0 else ("color: #f85149; font-weight: bold" if pnl_val < 0 else "")
+            styles[df.columns.get_loc("P&L $")] = color
+            styles[df.columns.get_loc("P&L %")] = color
         except:
             pass
         return styles
@@ -236,22 +202,18 @@ if page == "🏠 Portfolio Overview":
     total_pnl = total_market_value - total_adjusted_cost
     total_pnl_pct = (total_pnl / total_adjusted_cost * 100) if total_adjusted_cost != 0 else 0.0
 
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Total Market Value", f"${total_market_value:,.2f}")
-    col2.metric("Adjusted Cost (after ROC)", f"${total_adjusted_cost:,.2f}")
-    col3.metric("Unrealized P&L $", f"${total_pnl:,.2f}")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Total Cost (Paid)", f"${total_cost_sum:,.2f}")
+    c2.metric("Total Market Value", f"${total_market_value:,.2f}")
+    c3.metric("Adjusted Cost (after ROC)", f"${total_adjusted_cost:,.2f}")
+    c4.metric("Unrealized P&L $", f"${total_pnl:,.2f}")
 
-    col4, col5, col6 = st.columns(3)
-    pnl_pct_label = f"{total_pnl_pct:+.2f}%"
-    if total_pnl > 0:
-        col4.markdown(f"**Total P&L %**  \n<span style='color:#3fb950; font-size:1.6rem; font-weight:bold;'>{pnl_pct_label}</span>", unsafe_allow_html=True)
-    elif total_pnl < 0:
-        col4.markdown(f"**Total P&L %**  \n<span style='color:#f85149; font-size:1.6rem; font-weight:bold;'>{pnl_pct_label}</span>", unsafe_allow_html=True)
-    else:
-        col4.metric("Total P&L %", f"{total_pnl_pct:.2f}%")
-
-    col5.metric("Total Income Received", f"${total_income:,.2f}")
-    col6.metric("Cash", f"${data.get('cash', 0):,.2f}")
+    c5, c6, c7 = st.columns(3)
+    pnl_label = f"{total_pnl_pct:+.2f}%"
+    color = "#3fb950" if total_pnl > 0 else ("#f85149" if total_pnl < 0 else "#e6edf3")
+    c5.markdown(f"**Total P&L %**  \n<span style='color:{color}; font-size:1.6rem; font-weight:bold;'>{pnl_label}</span>", unsafe_allow_html=True)
+    c6.metric("Total Income", f"${total_income:,.2f}")
+    c7.metric("Cash", f"${data.get('cash', 0):,.2f}")
 
 # --------------------------
 # ADD / EDIT POSITIONS
@@ -264,26 +226,25 @@ elif page == "➕ Add / Edit Positions":
     with tab1:
         st.subheader("Add New Position (BUY)")
         with st.form("add_position_form", clear_on_submit=True):
-            ticker = st.selectbox("ETF", data["etfs"])
-            shares = st.number_input("Shares", min_value=0.0001, step=1.0, format="%.4f", value=0.0001)
-            price = st.number_input("Price per Share", min_value=0.0001, step=0.01, format="%.4f", value=0.0001)
+            ticker_options = [""] + data["etfs"]
+            ticker = st.selectbox("ETF", ticker_options, index=0, format_func=lambda x: "Select ETF..." if x == "" else x)
+            shares = st.number_input("Shares", min_value=0.0, step=1.0, format="%.1f", value=0.0)
+            price = st.number_input("Price per Share", min_value=0.0, step=0.01, format="%.2f", value=0.0)
             date = st.date_input("Date", value=datetime.today())
             notes = st.text_input("Notes (optional)", value="")
 
             if st.form_submit_button("✅ Save Position"):
-                if shares > 0 and price > 0:
+                if ticker == "":
+                    st.error("Please select an ETF")
+                elif shares > 0 and price > 0:
                     new_id = max([int(t.get("id", 0)) for t in data["transactions"]], default=0) + 1
                     data["transactions"].append({
-                        "id": new_id,
-                        "ticker": ticker,
-                        "type": "BUY",
-                        "shares": float(shares),
-                        "price": float(price),
-                        "date": str(date),
-                        "notes": notes
+                        "id": new_id, "ticker": ticker, "type": "BUY",
+                        "shares": float(shares), "price": float(price),
+                        "date": str(date), "notes": notes
                     })
                     save_data(data)
-                    st.success(f"✅ Position added! {shares:.4f} shares of {ticker} at ${price:.4f}")
+                    st.success(f"✅ Position added! {shares:.1f} shares of ${ticker} at ${price:.2f}")
                     st.balloons()
                 else:
                     st.error("Shares and Price must be greater than 0")
@@ -291,33 +252,34 @@ elif page == "➕ Add / Edit Positions":
     with tab2:
         st.subheader("Sell Position")
         with st.form("sell_position_form", clear_on_submit=True):
-            ticker = st.selectbox("ETF to Sell", data["etfs"], key="sell_ticker")
-            pos = calculate_position(ticker, data)
-            st.write(f"Current shares of {ticker}: **{pos['shares']:.4f}**")
-
-            shares = st.number_input("Shares to Sell", min_value=0.0001, step=1.0, format="%.4f", value=0.0001, key="sell_shares")
-            price = st.number_input("Sell Price", min_value=0.0001, step=0.01, format="%.4f", value=0.0001, key="sell_price")
+            ticker_options = [""] + data["etfs"]
+            ticker = st.selectbox("ETF to Sell", ticker_options, index=0, format_func=lambda x: "Select ETF..." if x == "" else x, key="sell_ticker")
+            if ticker:
+                pos = calculate_position(ticker, data)
+                st.write(f"Current shares of ${ticker}: **{pos['shares']:.1f}**")
+            shares = st.number_input("Shares to Sell", min_value=0.0, step=1.0, format="%.1f", value=0.0, key="sell_shares")
+            price = st.number_input("Sell Price", min_value=0.0, step=0.01, format="%.2f", value=0.0, key="sell_price")
             date = st.date_input("Date", value=datetime.today(), key="sell_date")
             notes = st.text_input("Notes (optional)", value="", key="sell_notes")
 
             if st.form_submit_button("✅ Confirm Sell"):
-                if shares > pos["shares"]:
-                    st.error(f"You only have {pos['shares']:.4f} shares")
-                elif shares > 0 and price > 0:
-                    new_id = max([int(t.get("id", 0)) for t in data["transactions"]], default=0) + 1
-                    data["transactions"].append({
-                        "id": new_id,
-                        "ticker": ticker,
-                        "type": "SELL",
-                        "shares": float(shares),
-                        "price": float(price),
-                        "date": str(date),
-                        "notes": notes
-                    })
-                    save_data(data)
-                    st.success(f"✅ Sold {shares:.4f} shares of {ticker}")
+                if ticker == "":
+                    st.error("Please select an ETF")
                 else:
-                    st.error("Shares and Price must be greater than 0")
+                    pos = calculate_position(ticker, data)
+                    if shares > pos["shares"]:
+                        st.error(f"You only have {pos['shares']:.1f} shares")
+                    elif shares > 0 and price > 0:
+                        new_id = max([int(t.get("id", 0)) for t in data["transactions"]], default=0) + 1
+                        data["transactions"].append({
+                            "id": new_id, "ticker": ticker, "type": "SELL",
+                            "shares": float(shares), "price": float(price),
+                            "date": str(date), "notes": notes
+                        })
+                        save_data(data)
+                        st.success(f"✅ Sold {shares:.1f} shares of ${ticker}")
+                    else:
+                        st.error("Shares and Price must be greater than 0")
 
     with tab3:
         st.subheader("Delete Transaction")
@@ -331,7 +293,7 @@ elif page == "➕ Add / Edit Positions":
                     t["id"] = i
                 save_data(data)
                 if len(data["transactions"]) < original_len:
-                    st.success("✅ Deleted")
+                    st.success("✅ Transaction deleted")
                     st.rerun()
                 else:
                     st.warning("ID not found")
@@ -343,25 +305,20 @@ elif page == "➕ Add / Edit Positions":
 # --------------------------
 elif page == "📥 Enter / Edit ROC":
     st.title("📥 Enter / Edit Distribution & ROC")
-
     tab1, tab2 = st.tabs(["Add New ROC", "Delete ROC"])
 
     with tab1:
-        st.markdown("### Automatic Last Dividend Helper")
         helper_ticker = st.selectbox("Check last dividend for:", data["etfs"], key="helper")
-
         if "last_div_amount" not in st.session_state:
             st.session_state.last_div_amount = None
-            st.session_state.last_div_date = None
             st.session_state.last_div_ticker = None
 
         if st.button("Get Last Dividend from Yahoo"):
             last_date, last_amount = get_last_dividend(helper_ticker)
             if last_amount:
                 st.session_state.last_div_amount = last_amount
-                st.session_state.last_div_date = last_date
                 st.session_state.last_div_ticker = helper_ticker
-                st.success(f"Last dividend for **{helper_ticker}**: **${last_amount}** on {last_date}")
+                st.success(f"✅ Last dividend for **{helper_ticker}**: **${last_amount}** on {last_date}")
             else:
                 st.warning("Could not find recent dividend data.")
 
@@ -372,37 +329,36 @@ elif page == "📥 Enter / Edit ROC":
                 st.session_state.fill_ticker = st.session_state.last_div_ticker
 
         st.divider()
-        default_ticker = st.session_state.get("fill_ticker", data["etfs"][0])
+        default_ticker = st.session_state.get("fill_ticker", "")
         default_dist = st.session_state.get("fill_dist", 0.0)
+        ticker_options = [""] + data["etfs"]
 
         with st.form("distribution_form", clear_on_submit=True):
-            ticker_index = data["etfs"].index(default_ticker) if default_ticker in data["etfs"] else 0
-            ticker = st.selectbox("Select ETF", data["etfs"], index=ticker_index)
+            ticker = st.selectbox("Select ETF", ticker_options, index=ticker_options.index(default_ticker) if default_ticker in ticker_options else 0, format_func=lambda x: "Select ETF..." if x == "" else x)
             dist_per_share = st.number_input("Distribution per Share ($)", min_value=0.0, value=float(default_dist), format="%.4f")
             roc_pct = st.number_input("ROC Percentage (%)", min_value=0.0, max_value=100.0, value=100.0, step=1.0, format="%.0f")
             dist_date = st.date_input("Date", value=datetime.today())
 
             if st.form_submit_button("✅ Save Distribution"):
-                pos = calculate_position(ticker, data)
-                shares = pos["shares"]
-                roc_dollar = dist_per_share * (roc_pct / 100.0) * shares
-
-                new_id = max([int(d.get("id", 0)) for d in data["distributions"]], default=0) + 1
-                data["distributions"].append({
-                    "id": new_id,
-                    "ticker": ticker,
-                    "date": str(dist_date),
-                    "distribution_per_share": dist_per_share,
-                    "roc_percent": roc_pct,
-                    "roc_amount": round(roc_dollar, 2),
-                    "ordinary_amount": round(dist_per_share * ((100 - roc_pct) / 100.0) * shares, 2),
-                    "shares_at_time": shares
-                })
-                save_data(data)
-                st.success(f"✅ Saved | ROC: {roc_pct:.0f}% | Reduction: ${roc_dollar:,.2f}")
-                st.session_state.fill_dist = 0.0
-                st.session_state.fill_ticker = None
-                st.rerun()
+                if ticker == "":
+                    st.error("Please select an ETF")
+                else:
+                    pos = calculate_position(ticker, data)
+                    shares = pos["shares"]
+                    roc_dollar = dist_per_share * (roc_pct / 100.0) * shares
+                    new_id = max([int(d.get("id", 0)) for d in data["distributions"]], default=0) + 1
+                    data["distributions"].append({
+                        "id": new_id, "ticker": ticker, "date": str(dist_date),
+                        "distribution_per_share": dist_per_share, "roc_percent": roc_pct,
+                        "roc_amount": round(roc_dollar, 2),
+                        "ordinary_amount": round(dist_per_share * ((100 - roc_pct) / 100.0) * shares, 2),
+                        "shares_at_time": shares
+                    })
+                    save_data(data)
+                    st.success(f"✅ Saved | ROC: {roc_pct:.0f}% | Reduction: ${roc_dollar:,.2f}")
+                    st.session_state.fill_dist = 0.0
+                    st.session_state.fill_ticker = None
+                    st.rerun()
 
     with tab2:
         if data["distributions"]:
@@ -415,7 +371,7 @@ elif page == "📥 Enter / Edit ROC":
                     d["id"] = i
                 save_data(data)
                 if len(data["distributions"]) < original_len:
-                    st.success("✅ Deleted")
+                    st.success("✅ ROC entry deleted")
                     st.rerun()
                 else:
                     st.warning("ID not found")
@@ -423,7 +379,7 @@ elif page == "📥 Enter / Edit ROC":
             st.info("No ROC entries yet.")
 
 # --------------------------
-# TICKER DETAILS
+# TICKER DETAILS + EDIT
 # --------------------------
 elif page == "🔍 Ticker Details":
     st.title("🔍 Ticker Details")
@@ -431,16 +387,43 @@ elif page == "🔍 Ticker Details":
     pos = calculate_position(selected, data)
     current_price = get_current_price(selected)
 
-    st.subheader(selected)
+    st.subheader(f"${selected}")
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Shares", f"{pos['shares']:.4f}")
-    c2.metric("Avg Cost", f"${pos['avg_cost']:.4f}")
-    c3.metric("Price", f"${current_price:.4f}" if current_price else "—")
-    c4.metric("Value", f"${(pos['shares'] * current_price):,.2f}" if current_price else "—")
+    c1.metric("Shares", f"{pos['shares']:.1f}")
+    c2.metric("Avg Cost", f"${pos['avg_cost']:.2f}")
+    c3.metric("Market Price", f"${current_price:.2f}" if current_price else "—")
+    c4.metric("Market Value", f"${(pos['shares'] * current_price):,.2f}" if current_price else "—")
 
-    st.markdown("#### Transactions")
+    st.markdown("#### Transactions (Buy & Sell)")
     txs = [t for t in data["transactions"] if t.get("ticker") == selected]
-    st.dataframe(pd.DataFrame(txs) if txs else pd.DataFrame(), use_container_width=True)
+    if txs:
+        st.dataframe(pd.DataFrame(txs), use_container_width=True)
+
+        st.markdown("#### Edit a Transaction")
+        edit_id = st.number_input("Transaction ID to edit", min_value=1, step=1, key="edit_id")
+        tx_to_edit = next((t for t in data["transactions"] if int(t.get("id", 0)) == edit_id), None)
+
+        if tx_to_edit:
+            with st.form("edit_tx_form"):
+                st.write(f"Editing ID {edit_id} — {tx_to_edit.get('type')} {tx_to_edit.get('ticker')}")
+                new_shares = st.number_input("Shares", value=float(tx_to_edit.get("shares", 0)), format="%.1f")
+                new_price = st.number_input("Price", value=float(tx_to_edit.get("price", 0)), format="%.2f")
+                new_date = st.date_input("Date", value=datetime.strptime(tx_to_edit.get("date", str(datetime.today().date())), "%Y-%m-%d").date())
+                new_notes = st.text_input("Notes", value=tx_to_edit.get("notes", ""))
+
+                if st.form_submit_button("✅ Save Changes"):
+                    tx_to_edit["shares"] = float(new_shares)
+                    tx_to_edit["price"] = float(new_price)
+                    tx_to_edit["date"] = str(new_date)
+                    tx_to_edit["notes"] = new_notes
+                    save_data(data)
+                    st.success("✅ Transaction updated")
+                    st.rerun()
+        else:
+            if edit_id > 0:
+                st.caption("Enter a valid Transaction ID from the table above to edit it.")
+    else:
+        st.info("No transactions for this ticker.")
 
     st.markdown("#### Distributions")
     dists = [d for d in data["distributions"] if d.get("ticker") == selected]
@@ -463,8 +446,6 @@ elif page == "📅 Dividend Calendar":
 # --------------------------
 elif page == "📈 Charts & Projection":
     st.title("📈 Charts & Income Projection")
-    st.subheader("Estimated Future Income")
-
     projection_data = []
     for ticker in data["etfs"]:
         pos = calculate_position(ticker, data)
@@ -474,17 +455,10 @@ elif page == "📈 Charts & Projection":
         if ticker_dists:
             latest = sorted(ticker_dists, key=lambda x: x.get("date", ""), reverse=True)[0]
             monthly = float(latest.get("distribution_per_share", 0)) * pos["shares"]
-            weekly = monthly / 4.33
-            yearly = monthly * 12
+            weekly, yearly = monthly / 4.33, monthly * 12
         else:
             monthly = weekly = yearly = 0
-        projection_data.append({
-            "Ticker": ticker,
-            "Shares": f"{pos['shares']:.4f}",
-            "Weekly": round(weekly, 2),
-            "Monthly": round(monthly, 2),
-            "Yearly": round(yearly, 2)
-        })
+        projection_data.append({"Ticker": f"${ticker}", "Shares": f"{pos['shares']:.1f}", "Weekly": round(weekly, 2), "Monthly": round(monthly, 2), "Yearly": round(yearly, 2)})
 
     if projection_data:
         proj_df = pd.DataFrame(projection_data)
@@ -497,7 +471,6 @@ elif page == "📈 Charts & Projection":
         st.info("No data to project yet.")
 
     st.divider()
-    st.subheader("Portfolio Allocation")
     alloc_data = []
     for ticker in data["etfs"]:
         pos = calculate_position(ticker, data)
@@ -537,28 +510,14 @@ elif page == "💰 Cash":
 # --------------------------
 elif page == "💾 Backup / Restore":
     st.title("💾 Backup / Restore Data")
-
-    st.markdown("""
-    **Important:**  
-    Because the app runs on Streamlit Cloud, data can be lost when the app restarts or updates.  
-    Use this page to keep your data safe.
-    """)
+    st.markdown("Download a backup before updates. Upload it later to restore your data.")
 
     st.subheader("Download Backup")
-    st.write("Download all your current data as a file. Keep this file safe on your phone or computer.")
-
     backup_json = json.dumps(data, indent=2)
-    st.download_button(
-        label="⬇️ Download Backup File",
-        data=backup_json,
-        file_name=f"etf_tracker_backup_{datetime.today().strftime('%Y%m%d_%H%M')}.json",
-        mime="application/json"
-    )
+    st.download_button("⬇️ Download Backup File", backup_json, f"etf_tracker_backup_{datetime.today().strftime('%Y%m%d_%H%M')}.json", "application/json")
 
     st.divider()
     st.subheader("Upload Backup (Restore)")
-    st.write("Upload a previously downloaded backup file to restore your data.")
-
     uploaded_file = st.file_uploader("Choose backup file", type=["json"])
     if uploaded_file is not None:
         try:
@@ -578,8 +537,7 @@ elif page == "📰 News":
     st.title("📰 ETF News")
     selected_news = st.selectbox("Select ETF", data["etfs"])
     try:
-        ticker_obj = yf.Ticker(selected_news)
-        news = ticker_obj.news
+        news = yf.Ticker(selected_news).news
         if news:
             for item in news[:6]:
                 st.markdown(f"**{item.get('title', 'No title')}**")
@@ -587,7 +545,7 @@ elif page == "📰 News":
                     st.markdown(f"[Read more]({item['link']})")
                 st.markdown("---")
         else:
-            st.info("No recent news found.")
+            st.info("No recent news found for this ETF.")
     except:
         st.warning("Could not load news.")
 
@@ -626,16 +584,14 @@ elif page == "📄 Reports":
             if p["shares"] <= 0:
                 continue
             report_rows.append({
-                "ETF": t,
-                "Shares": f"{p['shares']:.4f}",
-                "Avg Cost": f"{p['avg_cost']:.4f}",
-                "Adjusted Cost": p["adjusted_cost"],
-                "ROC Received": p["roc_total"]
+                "ETF": f"${t}", "Shares": f"{p['shares']:.1f}",
+                "Avg Cost": f"{p['avg_cost']:.2f}", "Total Cost": p["total_cost"],
+                "Adjusted Cost": p["adjusted_cost"], "ROC Received": p["roc_total"]
             })
         if report_rows:
             rdf = pd.DataFrame(report_rows)
             st.dataframe(rdf, use_container_width=True)
-            csv = rdf.to_csv(index=False).encode()
-            st.download_button("Download CSV", csv, f"etf_report_{datetime.today().strftime('%Y%m%d')}.csv", "text/csv")
+            st.download_button("Download CSV", rdf.to_csv(index=False).encode(), f"etf_report_{datetime.today().strftime('%Y%m%d')}.csv", "text/csv")
+            st.success("✅ Report generated")
         else:
             st.warning("No positions found.")
