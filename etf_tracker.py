@@ -1,15 +1,15 @@
 import streamlit as st
 import pandas as pd
 import json
+import os
 from datetime import datetime
 import yfinance as yf
 import plotly.express as px
-import gspread
-from google.oauth2.service_account import Credentials
 
 # ======================
 # CONFIG
 # ======================
+DATA_FILE = "portfolio_data.json"
 DEFAULT_ETFS = ["QQQI", "SPYI", "XSPI", "XQQI", "BTCI", "XBCI", "GIAX", "BLOX", "MLPI", "SLJY", "IAUI"]
 
 st.set_page_config(
@@ -39,8 +39,6 @@ def apply_theme():
             color: #ffffff !important;
         }
         .stSelectbox div[data-baseweb="select"] span { color: #ffffff !important; }
-        div[data-baseweb="popover"] { background-color: #21262d !important; }
-        div[data-baseweb="popover"] li { color: #ffffff !important; background-color: #21262d !important; }
         .stTextInput > div > div > input,
         .stNumberInput > div > div > input,
         .stDateInput > div > div > input {
@@ -69,136 +67,26 @@ def apply_theme():
 apply_theme()
 
 # ======================
-# GOOGLE SHEETS CONNECTION
-# ======================
-@st.cache_resource
-def get_gsheet_client():
-    scopes = [
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive"
-    ]
-    creds = Credentials.from_service_account_info(
-        st.secrets["gcp_service_account"],
-        scopes=scopes
-    )
-    client = gspread.authorize(creds)
-    return client
-
-def get_spreadsheet():
-    client = get_gsheet_client()
-    spreadsheet_id = st.secrets["google_sheets"]["spreadsheet_id"]
-    return client.open_by_key(spreadsheet_id)
-
-# ======================
-# DATA FUNCTIONS (Google Sheets)
+# DATA FUNCTIONS
 # ======================
 def load_data():
-    try:
-        ss = get_spreadsheet()
-
-        # --- Transactions ---
+    if os.path.exists(DATA_FILE):
         try:
-            tx_ws = ss.worksheet("transactions")
-            tx_records = tx_ws.get_all_records()
-            transactions = tx_records if tx_records else []
-        except:
-            transactions = []
-
-        # --- Distributions ---
-        try:
-            dist_ws = ss.worksheet("distributions")
-            dist_records = dist_ws.get_all_records()
-            distributions = dist_records if dist_records else []
-        except:
-            distributions = []
-
-        # --- Settings ---
-        cash = 0.0
-        etfs = DEFAULT_ETFS.copy()
-        try:
-            settings_ws = ss.worksheet("settings")
-            settings_data = settings_ws.get_all_records()
-            for row in settings_data:
-                key = str(row.get("key", row.get("A", ""))).lower()
-                value = row.get("value", row.get("B", ""))
-                if key == "cash":
-                    try:
-                        cash = float(value)
-                    except:
-                        cash = 0.0
-                elif key == "etfs":
-                    if value:
-                        etfs = [e.strip() for e in str(value).split(",") if e.strip()]
+            with open(DATA_FILE, "r") as f:
+                return json.load(f)
         except:
             pass
+    return {
+        "transactions": [],
+        "distributions": [],
+        "cash": 0.0,
+        "etfs": DEFAULT_ETFS.copy()
+    }
 
-        return {
-            "transactions": transactions,
-            "distributions": distributions,
-            "cash": cash,
-            "etfs": etfs
-        }
-    except Exception as e:
-        st.error(f"Error loading data from Google Sheets: {e}")
-        return {
-            "transactions": [],
-            "distributions": [],
-            "cash": 0.0,
-            "etfs": DEFAULT_ETFS.copy()
-        }
+def save_data(data):
+    with open(DATA_FILE, "w") as f:
+        json.dump(data, f, indent=2)
 
-def save_transactions(transactions):
-    ss = get_spreadsheet()
-    try:
-        ws = ss.worksheet("transactions")
-    except:
-        ws = ss.add_worksheet(title="transactions", rows=1000, cols=10)
-
-    ws.clear()
-    if transactions:
-        header = list(transactions[0].keys())
-        rows = [header] + [[t.get(h, "") for h in header] for t in transactions]
-        ws.update("A1", rows)
-    else:
-        ws.update("A1", [["id", "ticker", "type", "shares", "price", "date", "notes"]])
-
-def save_distributions(distributions):
-    ss = get_spreadsheet()
-    try:
-        ws = ss.worksheet("distributions")
-    except:
-        ws = ss.add_worksheet(title="distributions", rows=1000, cols=10)
-
-    ws.clear()
-    if distributions:
-        header = list(distributions[0].keys())
-        rows = [header] + [[d.get(h, "") for h in header] for d in distributions]
-        ws.update("A1", rows)
-    else:
-        ws.update("A1", [["id", "ticker", "date", "distribution_per_share", "roc_percent", "roc_amount", "ordinary_amount", "shares_at_time"]])
-
-def save_settings(cash, etfs):
-    ss = get_spreadsheet()
-    try:
-        ws = ss.worksheet("settings")
-    except:
-        ws = ss.add_worksheet(title="settings", rows=10, cols=5)
-
-    ws.clear()
-    ws.update("A1", [
-        ["key", "value"],
-        ["cash", cash],
-        ["etfs", ",".join(etfs)]
-    ])
-
-def save_all(data):
-    save_transactions(data["transactions"])
-    save_distributions(data["distributions"])
-    save_settings(data["cash"], data["etfs"])
-
-# ======================
-# HELPER FUNCTIONS
-# ======================
 def get_current_price(ticker):
     try:
         t = yf.Ticker(ticker)
@@ -270,6 +158,7 @@ page = st.sidebar.radio(
         "📅 Dividend Calendar",
         "📈 Charts & Projection",
         "💰 Cash",
+        "💾 Backup / Restore",
         "📰 News",
         "⚙️ Manage ETFs",
         "📄 Reports"
@@ -277,7 +166,6 @@ page = st.sidebar.radio(
 )
 
 if st.sidebar.button("🔄 Refresh Prices"):
-    st.cache_resource.clear()
     st.rerun()
 
 # ======================
@@ -394,7 +282,7 @@ elif page == "➕ Add / Edit Positions":
                         "date": str(date),
                         "notes": notes
                     })
-                    save_all(data)
+                    save_data(data)
                     st.success(f"✅ Position added! {shares:.4f} shares of {ticker} at ${price:.4f}")
                     st.balloons()
                 else:
@@ -408,7 +296,7 @@ elif page == "➕ Add / Edit Positions":
             st.write(f"Current shares of {ticker}: **{pos['shares']:.4f}**")
 
             shares = st.number_input("Shares to Sell", min_value=0.0001, step=1.0, format="%.4f", value=0.0001, key="sell_shares")
-            price = st.number_input("Sell Price per Share", min_value=0.0001, step=0.01, format="%.4f", value=0.0001, key="sell_price")
+            price = st.number_input("Sell Price", min_value=0.0001, step=0.01, format="%.4f", value=0.0001, key="sell_price")
             date = st.date_input("Date", value=datetime.today(), key="sell_date")
             notes = st.text_input("Notes (optional)", value="", key="sell_notes")
 
@@ -426,24 +314,24 @@ elif page == "➕ Add / Edit Positions":
                         "date": str(date),
                         "notes": notes
                     })
-                    save_all(data)
-                    st.success(f"✅ Sold {shares:.4f} shares of {ticker} at ${price:.4f}")
+                    save_data(data)
+                    st.success(f"✅ Sold {shares:.4f} shares of {ticker}")
                 else:
                     st.error("Shares and Price must be greater than 0")
 
     with tab3:
-        st.subheader("Delete a Transaction")
+        st.subheader("Delete Transaction")
         if data["transactions"]:
             st.dataframe(pd.DataFrame(data["transactions"]), use_container_width=True)
-            delete_id = st.number_input("Enter Transaction ID to delete", min_value=1, step=1)
+            delete_id = st.number_input("Transaction ID to delete", min_value=1, step=1)
             if st.button("🗑️ Delete Transaction"):
                 original_len = len(data["transactions"])
                 data["transactions"] = [t for t in data["transactions"] if int(t.get("id", 0)) != delete_id]
                 for i, t in enumerate(data["transactions"], 1):
                     t["id"] = i
-                save_all(data)
+                save_data(data)
                 if len(data["transactions"]) < original_len:
-                    st.success("✅ Transaction deleted")
+                    st.success("✅ Deleted")
                     st.rerun()
                 else:
                     st.warning("ID not found")
@@ -478,15 +366,12 @@ elif page == "📥 Enter / Edit ROC":
                 st.warning("Could not find recent dividend data.")
 
         if st.session_state.last_div_amount is not None:
-            st.info(f"Ready: **{st.session_state.last_div_ticker}** → ${st.session_state.last_div_amount} ({st.session_state.last_div_date})")
+            st.info(f"Ready: **{st.session_state.last_div_ticker}** → ${st.session_state.last_div_amount}")
             if st.button("✅ Use this dividend amount"):
                 st.session_state.fill_dist = st.session_state.last_div_amount
                 st.session_state.fill_ticker = st.session_state.last_div_ticker
-                st.success("Dividend amount ready for the form below.")
 
         st.divider()
-        st.markdown("### Enter Distribution + ROC")
-
         default_ticker = st.session_state.get("fill_ticker", data["etfs"][0])
         default_dist = st.session_state.get("fill_dist", 0.0)
 
@@ -501,7 +386,6 @@ elif page == "📥 Enter / Edit ROC":
                 pos = calculate_position(ticker, data)
                 shares = pos["shares"]
                 roc_dollar = dist_per_share * (roc_pct / 100.0) * shares
-                ordinary_dollar = dist_per_share * ((100 - roc_pct) / 100.0) * shares
 
                 new_id = max([int(d.get("id", 0)) for d in data["distributions"]], default=0) + 1
                 data["distributions"].append({
@@ -511,28 +395,27 @@ elif page == "📥 Enter / Edit ROC":
                     "distribution_per_share": dist_per_share,
                     "roc_percent": roc_pct,
                     "roc_amount": round(roc_dollar, 2),
-                    "ordinary_amount": round(ordinary_dollar, 2),
+                    "ordinary_amount": round(dist_per_share * ((100 - roc_pct) / 100.0) * shares, 2),
                     "shares_at_time": shares
                 })
-                save_all(data)
+                save_data(data)
                 st.success(f"✅ Saved | ROC: {roc_pct:.0f}% | Reduction: ${roc_dollar:,.2f}")
                 st.session_state.fill_dist = 0.0
                 st.session_state.fill_ticker = None
                 st.rerun()
 
     with tab2:
-        st.subheader("Delete ROC Entry")
         if data["distributions"]:
             st.dataframe(pd.DataFrame(data["distributions"]), use_container_width=True)
-            delete_roc_id = st.number_input("Enter ROC ID to delete", min_value=1, step=1, key="del_roc")
+            delete_roc_id = st.number_input("ROC ID to delete", min_value=1, step=1, key="del_roc")
             if st.button("🗑️ Delete ROC Entry"):
                 original_len = len(data["distributions"])
                 data["distributions"] = [d for d in data["distributions"] if int(d.get("id", 0)) != delete_roc_id]
                 for i, d in enumerate(data["distributions"], 1):
                     d["id"] = i
-                save_all(data)
+                save_data(data)
                 if len(data["distributions"]) < original_len:
-                    st.success("✅ ROC entry deleted")
+                    st.success("✅ Deleted")
                     st.rerun()
                 else:
                     st.warning("ID not found")
@@ -571,8 +454,7 @@ elif page == "📅 Dividend Calendar":
     if data["distributions"]:
         dist_df = pd.DataFrame(data["distributions"])
         dist_df["date"] = pd.to_datetime(dist_df["date"])
-        dist_df = dist_df.sort_values("date", ascending=False)
-        st.dataframe(dist_df, use_container_width=True)
+        st.dataframe(dist_df.sort_values("date", ascending=False), use_container_width=True)
     else:
         st.info("No distributions recorded yet.")
 
@@ -636,21 +518,58 @@ elif page == "💰 Cash":
     st.divider()
     col1, col2 = st.columns(2)
     with col1:
-        st.subheader("Add Cash")
         add_amount = st.number_input("Amount to Add", min_value=0.0, step=50.0, key="add_cash")
         if st.button("Add Cash"):
             data["cash"] = data.get("cash", 0) + add_amount
-            save_all(data)
+            save_data(data)
             st.success(f"✅ Added ${add_amount:,.2f}")
             st.rerun()
     with col2:
-        st.subheader("Remove Cash")
         remove_amount = st.number_input("Amount to Remove", min_value=0.0, step=50.0, key="remove_cash")
         if st.button("Remove Cash"):
             data["cash"] = max(0, data.get("cash", 0) - remove_amount)
-            save_all(data)
+            save_data(data)
             st.success(f"✅ Removed ${remove_amount:,.2f}")
             st.rerun()
+
+# --------------------------
+# BACKUP / RESTORE
+# --------------------------
+elif page == "💾 Backup / Restore":
+    st.title("💾 Backup / Restore Data")
+
+    st.markdown("""
+    **Important:**  
+    Because the app runs on Streamlit Cloud, data can be lost when the app restarts or updates.  
+    Use this page to keep your data safe.
+    """)
+
+    st.subheader("Download Backup")
+    st.write("Download all your current data as a file. Keep this file safe on your phone or computer.")
+
+    backup_json = json.dumps(data, indent=2)
+    st.download_button(
+        label="⬇️ Download Backup File",
+        data=backup_json,
+        file_name=f"etf_tracker_backup_{datetime.today().strftime('%Y%m%d_%H%M')}.json",
+        mime="application/json"
+    )
+
+    st.divider()
+    st.subheader("Upload Backup (Restore)")
+    st.write("Upload a previously downloaded backup file to restore your data.")
+
+    uploaded_file = st.file_uploader("Choose backup file", type=["json"])
+    if uploaded_file is not None:
+        try:
+            uploaded_data = json.load(uploaded_file)
+            if st.button("🔄 Restore This Backup"):
+                save_data(uploaded_data)
+                st.success("✅ Data restored successfully!")
+                st.balloons()
+                st.rerun()
+        except Exception as e:
+            st.error(f"Error reading file: {e}")
 
 # --------------------------
 # NEWS
@@ -677,26 +596,21 @@ elif page == "📰 News":
 # --------------------------
 elif page == "⚙️ Manage ETFs":
     st.title("⚙️ Manage ETFs")
-    st.subheader("Currently Tracked ETFs")
-    st.write(", ".join(data["etfs"]))
+    st.write("Currently tracked:", ", ".join(data["etfs"]))
     st.divider()
-    st.subheader("Add New ETF")
-    new_ticker = st.text_input("New ETF Ticker").upper().strip()
+    new_ticker = st.text_input("Add new ETF").upper().strip()
     if st.button("➕ Add ETF"):
         if new_ticker and new_ticker not in data["etfs"]:
             data["etfs"].append(new_ticker)
-            save_all(data)
+            save_data(data)
             st.success(f"✅ Added {new_ticker}")
             st.rerun()
-        elif new_ticker in data["etfs"]:
-            st.warning("Already exists")
     st.divider()
-    st.subheader("Delete ETF")
     if data["etfs"]:
-        del_ticker = st.selectbox("Select ETF to remove", data["etfs"])
+        del_ticker = st.selectbox("Delete ETF", data["etfs"])
         if st.button("🗑️ Delete ETF"):
             data["etfs"] = [t for t in data["etfs"] if t != del_ticker]
-            save_all(data)
+            save_data(data)
             st.success(f"✅ Removed {del_ticker}")
             st.rerun()
 
