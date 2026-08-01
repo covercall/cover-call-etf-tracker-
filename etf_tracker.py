@@ -1,15 +1,15 @@
 import streamlit as st
 import pandas as pd
 import json
-import os
 from datetime import datetime
 import yfinance as yf
 import plotly.express as px
+import gspread
+from google.oauth2.service_account import Credentials
 
 # ======================
 # CONFIG
 # ======================
-DATA_FILE = "portfolio_data.json"
 DEFAULT_ETFS = ["QQQI", "SPYI", "XSPI", "XQQI", "BTCI", "XBCI", "GIAX", "BLOX", "MLPI", "SLJY", "IAUI"]
 
 st.set_page_config(
@@ -29,41 +29,18 @@ def apply_theme():
     if st.session_state.theme == "Dark":
         st.markdown("""
         <style>
-        .stApp {
-            background-color: #0e1117;
-            color: #ffffff;
-        }
-        section[data-testid="stSidebar"] {
-            background-color: #161b22;
-            color: #ffffff;
-        }
-        h1, h2, h3, h4, h5, h6 {
-            color: #ffffff !important;
-        }
-        [data-testid="stMetricValue"] {
-            color: #ffffff !important;
-        }
-        [data-testid="stMetricLabel"] {
-            color: #cccccc !important;
-        }
-        /* Dropdowns and inputs - dark background with white text */
+        .stApp { background-color: #0e1117; color: #ffffff; }
+        section[data-testid="stSidebar"] { background-color: #161b22; color: #ffffff; }
+        h1, h2, h3, h4, h5, h6 { color: #ffffff !important; }
+        [data-testid="stMetricValue"] { color: #ffffff !important; }
+        [data-testid="stMetricLabel"] { color: #cccccc !important; }
         .stSelectbox div[data-baseweb="select"] > div {
             background-color: #21262d !important;
             color: #ffffff !important;
         }
-        .stSelectbox div[data-baseweb="select"] span {
-            color: #ffffff !important;
-        }
-        div[data-baseweb="popover"] {
-            background-color: #21262d !important;
-        }
-        div[data-baseweb="popover"] li {
-            color: #ffffff !important;
-            background-color: #21262d !important;
-        }
-        div[data-baseweb="popover"] li:hover {
-            background-color: #30363d !important;
-        }
+        .stSelectbox div[data-baseweb="select"] span { color: #ffffff !important; }
+        div[data-baseweb="popover"] { background-color: #21262d !important; }
+        div[data-baseweb="popover"] li { color: #ffffff !important; background-color: #21262d !important; }
         .stTextInput > div > div > input,
         .stNumberInput > div > div > input,
         .stDateInput > div > div > input {
@@ -79,49 +56,149 @@ def apply_theme():
             background-color: #2ea043;
             color: white;
         }
-        p, span, label, div {
-            color: #e6edf3 !important;
-        }
+        p, span, label, div { color: #e6edf3 !important; }
         </style>
         """, unsafe_allow_html=True)
     else:
         st.markdown("""
         <style>
-        .stApp {
-            background-color: #ffffff;
-            color: #1f2328;
-        }
-        .stSelectbox div[data-baseweb="select"] > div {
-            background-color: #ffffff !important;
-            color: #1f2328 !important;
-        }
-        .stSelectbox div[data-baseweb="select"] span {
-            color: #1f2328 !important;
-        }
+        .stApp { background-color: #ffffff; color: #1f2328; }
         </style>
         """, unsafe_allow_html=True)
 
 apply_theme()
 
 # ======================
-# DATA FUNCTIONS
+# GOOGLE SHEETS CONNECTION
+# ======================
+@st.cache_resource
+def get_gsheet_client():
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive"
+    ]
+    creds = Credentials.from_service_account_info(
+        st.secrets["gcp_service_account"],
+        scopes=scopes
+    )
+    client = gspread.authorize(creds)
+    return client
+
+def get_spreadsheet():
+    client = get_gsheet_client()
+    spreadsheet_id = st.secrets["google_sheets"]["spreadsheet_id"]
+    return client.open_by_key(spreadsheet_id)
+
+# ======================
+# DATA FUNCTIONS (Google Sheets)
 # ======================
 def load_data():
-    if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "r") as f:
-            return json.load(f)
-    return {
-        "transactions": [],
-        "distributions": [],
-        "cash": 0.0,
-        "cash_history": [],
-        "etfs": DEFAULT_ETFS.copy()
-    }
+    try:
+        ss = get_spreadsheet()
 
-def save_data(data):
-    with open(DATA_FILE, "w") as f:
-        json.dump(data, f, indent=2)
+        # --- Transactions ---
+        try:
+            tx_ws = ss.worksheet("transactions")
+            tx_records = tx_ws.get_all_records()
+            transactions = tx_records if tx_records else []
+        except:
+            transactions = []
 
+        # --- Distributions ---
+        try:
+            dist_ws = ss.worksheet("distributions")
+            dist_records = dist_ws.get_all_records()
+            distributions = dist_records if dist_records else []
+        except:
+            distributions = []
+
+        # --- Settings ---
+        cash = 0.0
+        etfs = DEFAULT_ETFS.copy()
+        try:
+            settings_ws = ss.worksheet("settings")
+            settings_data = settings_ws.get_all_records()
+            for row in settings_data:
+                key = str(row.get("key", row.get("A", ""))).lower()
+                value = row.get("value", row.get("B", ""))
+                if key == "cash":
+                    try:
+                        cash = float(value)
+                    except:
+                        cash = 0.0
+                elif key == "etfs":
+                    if value:
+                        etfs = [e.strip() for e in str(value).split(",") if e.strip()]
+        except:
+            pass
+
+        return {
+            "transactions": transactions,
+            "distributions": distributions,
+            "cash": cash,
+            "etfs": etfs
+        }
+    except Exception as e:
+        st.error(f"Error loading data from Google Sheets: {e}")
+        return {
+            "transactions": [],
+            "distributions": [],
+            "cash": 0.0,
+            "etfs": DEFAULT_ETFS.copy()
+        }
+
+def save_transactions(transactions):
+    ss = get_spreadsheet()
+    try:
+        ws = ss.worksheet("transactions")
+    except:
+        ws = ss.add_worksheet(title="transactions", rows=1000, cols=10)
+
+    ws.clear()
+    if transactions:
+        header = list(transactions[0].keys())
+        rows = [header] + [[t.get(h, "") for h in header] for t in transactions]
+        ws.update("A1", rows)
+    else:
+        ws.update("A1", [["id", "ticker", "type", "shares", "price", "date", "notes"]])
+
+def save_distributions(distributions):
+    ss = get_spreadsheet()
+    try:
+        ws = ss.worksheet("distributions")
+    except:
+        ws = ss.add_worksheet(title="distributions", rows=1000, cols=10)
+
+    ws.clear()
+    if distributions:
+        header = list(distributions[0].keys())
+        rows = [header] + [[d.get(h, "") for h in header] for d in distributions]
+        ws.update("A1", rows)
+    else:
+        ws.update("A1", [["id", "ticker", "date", "distribution_per_share", "roc_percent", "roc_amount", "ordinary_amount", "shares_at_time"]])
+
+def save_settings(cash, etfs):
+    ss = get_spreadsheet()
+    try:
+        ws = ss.worksheet("settings")
+    except:
+        ws = ss.add_worksheet(title="settings", rows=10, cols=5)
+
+    ws.clear()
+    ws.update("A1", [
+        ["key", "value"],
+        ["cash", cash],
+        ["etfs", ",".join(etfs)]
+    ])
+
+def save_all(data):
+    save_transactions(data["transactions"])
+    save_distributions(data["distributions"])
+    save_settings(data["cash"], data["etfs"])
+
+# ======================
+# HELPER FUNCTIONS
+# ======================
 def get_current_price(ticker):
     try:
         t = yf.Ticker(ticker)
@@ -145,18 +222,18 @@ def get_last_dividend(ticker):
     return None, None
 
 def calculate_position(ticker, data):
-    buys = [t for t in data["transactions"] if t["ticker"] == ticker and t["type"] == "BUY"]
-    sells = [t for t in data["transactions"] if t["ticker"] == ticker and t["type"] == "SELL"]
+    buys = [t for t in data["transactions"] if t.get("ticker") == ticker and t.get("type") == "BUY"]
+    sells = [t for t in data["transactions"] if t.get("ticker") == ticker and t.get("type") == "SELL"]
 
-    shares_bought = sum(t["shares"] for t in buys)
-    shares_sold = sum(t["shares"] for t in sells)
+    shares_bought = sum(float(t.get("shares", 0)) for t in buys)
+    shares_sold = sum(float(t.get("shares", 0)) for t in sells)
     total_shares = shares_bought - shares_sold
 
-    cost_bought = sum(t["shares"] * t["price"] for t in buys)
-    cost_sold = sum(t["shares"] * t["price"] for t in sells)
+    cost_bought = sum(float(t.get("shares", 0)) * float(t.get("price", 0)) for t in buys)
+    cost_sold = sum(float(t.get("shares", 0)) * float(t.get("price", 0)) for t in sells)
     total_cost = cost_bought - cost_sold
 
-    roc_total = sum(d.get("roc_amount", 0) for d in data["distributions"] if d["ticker"] == ticker)
+    roc_total = sum(float(d.get("roc_amount", 0)) for d in data["distributions"] if d.get("ticker") == ticker)
     adjusted_cost = max(total_cost - roc_total, 0)
     avg_cost = adjusted_cost / total_shares if total_shares > 0 else 0
 
@@ -200,6 +277,7 @@ page = st.sidebar.radio(
 )
 
 if st.sidebar.button("🔄 Refresh Prices"):
+    st.cache_resource.clear()
     st.rerun()
 
 # ======================
@@ -222,8 +300,8 @@ if page == "🏠 Portfolio Overview":
         pnl_pct = (pnl / pos["adjusted_cost"] * 100) if pos["adjusted_cost"] != 0 else 0.0
 
         income = sum(
-            d.get("distribution_per_share", 0) * d.get("shares_at_time", 0)
-            for d in data["distributions"] if d["ticker"] == ticker
+            float(d.get("distribution_per_share", 0)) * float(d.get("shares_at_time", 0))
+            for d in data["distributions"] if d.get("ticker") == ticker
         )
 
         overview_rows.append({
@@ -264,7 +342,6 @@ if page == "🏠 Portfolio Overview":
     else:
         st.info("No positions yet.")
 
-    # ===== SUMMARY METRICS =====
     st.divider()
     st.subheader("Portfolio Summary")
 
@@ -277,8 +354,6 @@ if page == "🏠 Portfolio Overview":
     col3.metric("Unrealized P&L $", f"${total_pnl:,.2f}")
 
     col4, col5, col6 = st.columns(3)
-
-    # Color the total P&L %
     pnl_pct_label = f"{total_pnl_pct:+.2f}%"
     if total_pnl > 0:
         col4.markdown(f"**Total P&L %**  \n<span style='color:#3fb950; font-size:1.6rem; font-weight:bold;'>{pnl_pct_label}</span>", unsafe_allow_html=True)
@@ -309,7 +384,7 @@ elif page == "➕ Add / Edit Positions":
 
             if st.form_submit_button("✅ Save Position"):
                 if shares > 0 and price > 0:
-                    new_id = max([t.get("id", 0) for t in data["transactions"]], default=0) + 1
+                    new_id = max([int(t.get("id", 0)) for t in data["transactions"]], default=0) + 1
                     data["transactions"].append({
                         "id": new_id,
                         "ticker": ticker,
@@ -319,7 +394,7 @@ elif page == "➕ Add / Edit Positions":
                         "date": str(date),
                         "notes": notes
                     })
-                    save_data(data)
+                    save_all(data)
                     st.success(f"✅ Position added! {shares:.4f} shares of {ticker} at ${price:.4f}")
                     st.balloons()
                 else:
@@ -341,7 +416,7 @@ elif page == "➕ Add / Edit Positions":
                 if shares > pos["shares"]:
                     st.error(f"You only have {pos['shares']:.4f} shares")
                 elif shares > 0 and price > 0:
-                    new_id = max([t.get("id", 0) for t in data["transactions"]], default=0) + 1
+                    new_id = max([int(t.get("id", 0)) for t in data["transactions"]], default=0) + 1
                     data["transactions"].append({
                         "id": new_id,
                         "ticker": ticker,
@@ -351,7 +426,7 @@ elif page == "➕ Add / Edit Positions":
                         "date": str(date),
                         "notes": notes
                     })
-                    save_data(data)
+                    save_all(data)
                     st.success(f"✅ Sold {shares:.4f} shares of {ticker} at ${price:.4f}")
                 else:
                     st.error("Shares and Price must be greater than 0")
@@ -363,10 +438,10 @@ elif page == "➕ Add / Edit Positions":
             delete_id = st.number_input("Enter Transaction ID to delete", min_value=1, step=1)
             if st.button("🗑️ Delete Transaction"):
                 original_len = len(data["transactions"])
-                data["transactions"] = [t for t in data["transactions"] if t.get("id") != delete_id]
+                data["transactions"] = [t for t in data["transactions"] if int(t.get("id", 0)) != delete_id]
                 for i, t in enumerate(data["transactions"], 1):
                     t["id"] = i
-                save_data(data)
+                save_all(data)
                 if len(data["transactions"]) < original_len:
                     st.success("✅ Transaction deleted")
                     st.rerun()
@@ -381,7 +456,7 @@ elif page == "➕ Add / Edit Positions":
 elif page == "📥 Enter / Edit ROC":
     st.title("📥 Enter / Edit Distribution & ROC")
 
-    tab1, tab2 = st.tabs(["Add New ROC", "Edit / Delete ROC"])
+    tab1, tab2 = st.tabs(["Add New ROC", "Delete ROC"])
 
     with tab1:
         st.markdown("### Automatic Last Dividend Helper")
@@ -428,8 +503,9 @@ elif page == "📥 Enter / Edit ROC":
                 roc_dollar = dist_per_share * (roc_pct / 100.0) * shares
                 ordinary_dollar = dist_per_share * ((100 - roc_pct) / 100.0) * shares
 
+                new_id = max([int(d.get("id", 0)) for d in data["distributions"]], default=0) + 1
                 data["distributions"].append({
-                    "id": max([d.get("id", 0) for d in data["distributions"]], default=0) + 1,
+                    "id": new_id,
                     "ticker": ticker,
                     "date": str(dist_date),
                     "distribution_per_share": dist_per_share,
@@ -438,7 +514,7 @@ elif page == "📥 Enter / Edit ROC":
                     "ordinary_amount": round(ordinary_dollar, 2),
                     "shares_at_time": shares
                 })
-                save_data(data)
+                save_all(data)
                 st.success(f"✅ Saved | ROC: {roc_pct:.0f}% | Reduction: ${roc_dollar:,.2f}")
                 st.session_state.fill_dist = 0.0
                 st.session_state.fill_ticker = None
@@ -447,19 +523,14 @@ elif page == "📥 Enter / Edit ROC":
     with tab2:
         st.subheader("Delete ROC Entry")
         if data["distributions"]:
-            for i, d in enumerate(data["distributions"], 1):
-                if "id" not in d:
-                    d["id"] = i
-            save_data(data)
-
             st.dataframe(pd.DataFrame(data["distributions"]), use_container_width=True)
             delete_roc_id = st.number_input("Enter ROC ID to delete", min_value=1, step=1, key="del_roc")
             if st.button("🗑️ Delete ROC Entry"):
                 original_len = len(data["distributions"])
-                data["distributions"] = [d for d in data["distributions"] if d.get("id") != delete_roc_id]
+                data["distributions"] = [d for d in data["distributions"] if int(d.get("id", 0)) != delete_roc_id]
                 for i, d in enumerate(data["distributions"], 1):
                     d["id"] = i
-                save_data(data)
+                save_all(data)
                 if len(data["distributions"]) < original_len:
                     st.success("✅ ROC entry deleted")
                     st.rerun()
@@ -485,11 +556,11 @@ elif page == "🔍 Ticker Details":
     c4.metric("Value", f"${(pos['shares'] * current_price):,.2f}" if current_price else "—")
 
     st.markdown("#### Transactions")
-    txs = [t for t in data["transactions"] if t["ticker"] == selected]
+    txs = [t for t in data["transactions"] if t.get("ticker") == selected]
     st.dataframe(pd.DataFrame(txs) if txs else pd.DataFrame(), use_container_width=True)
 
     st.markdown("#### Distributions")
-    dists = [d for d in data["distributions"] if d["ticker"] == selected]
+    dists = [d for d in data["distributions"] if d.get("ticker") == selected]
     st.dataframe(pd.DataFrame(dists) if dists else pd.DataFrame(), use_container_width=True)
 
 # --------------------------
@@ -517,10 +588,10 @@ elif page == "📈 Charts & Projection":
         pos = calculate_position(ticker, data)
         if pos["shares"] <= 0:
             continue
-        ticker_dists = [d for d in data["distributions"] if d["ticker"] == ticker]
+        ticker_dists = [d for d in data["distributions"] if d.get("ticker") == ticker]
         if ticker_dists:
-            latest = sorted(ticker_dists, key=lambda x: x["date"], reverse=True)[0]
-            monthly = latest["distribution_per_share"] * pos["shares"]
+            latest = sorted(ticker_dists, key=lambda x: x.get("date", ""), reverse=True)[0]
+            monthly = float(latest.get("distribution_per_share", 0)) * pos["shares"]
             weekly = monthly / 4.33
             yearly = monthly * 12
         else:
@@ -569,7 +640,7 @@ elif page == "💰 Cash":
         add_amount = st.number_input("Amount to Add", min_value=0.0, step=50.0, key="add_cash")
         if st.button("Add Cash"):
             data["cash"] = data.get("cash", 0) + add_amount
-            save_data(data)
+            save_all(data)
             st.success(f"✅ Added ${add_amount:,.2f}")
             st.rerun()
     with col2:
@@ -577,7 +648,7 @@ elif page == "💰 Cash":
         remove_amount = st.number_input("Amount to Remove", min_value=0.0, step=50.0, key="remove_cash")
         if st.button("Remove Cash"):
             data["cash"] = max(0, data.get("cash", 0) - remove_amount)
-            save_data(data)
+            save_all(data)
             st.success(f"✅ Removed ${remove_amount:,.2f}")
             st.rerun()
 
@@ -614,7 +685,7 @@ elif page == "⚙️ Manage ETFs":
     if st.button("➕ Add ETF"):
         if new_ticker and new_ticker not in data["etfs"]:
             data["etfs"].append(new_ticker)
-            save_data(data)
+            save_all(data)
             st.success(f"✅ Added {new_ticker}")
             st.rerun()
         elif new_ticker in data["etfs"]:
@@ -625,7 +696,7 @@ elif page == "⚙️ Manage ETFs":
         del_ticker = st.selectbox("Select ETF to remove", data["etfs"])
         if st.button("🗑️ Delete ETF"):
             data["etfs"] = [t for t in data["etfs"] if t != del_ticker]
-            save_data(data)
+            save_all(data)
             st.success(f"✅ Removed {del_ticker}")
             st.rerun()
 
