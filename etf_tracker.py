@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import json
 import os
-from datetime import datetime
+from datetime import datetime, date
 import yfinance as yf
 import plotly.express as px
 
@@ -39,7 +39,6 @@ def apply_theme():
 apply_theme()
 
 def fmt(x):
-    """Clean number: 11.0 or 11.25, no long zeros"""
     try:
         x = float(x)
         if abs(x - round(x)) < 1e-9:
@@ -108,6 +107,12 @@ def calculate_position(ticker, data):
         "roc_total": round(roc_total, 2),
         "ordinary_total": round(ordinary_total, 2)
     }
+
+def parse_date(d):
+    try:
+        return datetime.strptime(str(d)[:10], "%Y-%m-%d").date()
+    except:
+        return None
 
 data = load_data()
 
@@ -207,31 +212,40 @@ if page == "🏠 Portfolio Overview":
     c2.metric("Total Market Value", f"${fmt(total_market_value)}")
     c3.metric("Adjusted Cost (after ROC)", f"${fmt(total_adjusted_cost)}")
 
-    pnl_color = "#3fb950" if total_pnl > 0 else ("#f85149" if total_pnl < 0 else "#e6edf3")
-    c4.markdown(
-        f"**Unrealized P&L $**  \n<span style='color:{pnl_color}; font-size:1.5rem; font-weight:bold;'>${fmt(total_pnl)}</span>",
-        unsafe_allow_html=True
-    )
+    # P&L $ with color (fixed rendering)
+    if total_pnl > 0:
+        c4.metric("Unrealized P&L $", f"${fmt(total_pnl)}", delta=f"+{fmt(total_pnl)}", delta_color="normal")
+    elif total_pnl < 0:
+        c4.metric("Unrealized P&L $", f"${fmt(total_pnl)}", delta=f"{fmt(total_pnl)}", delta_color="inverse")
+    else:
+        c4.metric("Unrealized P&L $", f"${fmt(total_pnl)}")
 
     c5, c6, c7 = st.columns(3)
-    pct_color = "#3fb950" if total_pnl > 0 else ("#f85149" if total_pnl < 0 else "#e6edf3")
-    c5.markdown(
-        f"**Total P&L %**  \n<span style='color:{pct_color}; font-size:1.5rem; font-weight:bold;'>{total_pnl_pct:+.1f}%</span>",
-        unsafe_allow_html=True
-    )
 
-    # Income box: Total + Ordinary + ROC
-    inc_color = "#3fb950" if total_income > 0 else ("#f85149" if total_income < 0 else "#e6edf3")
-    c6.markdown(
-        f"""
-        <div style="border:1px solid #30363d; border-radius:8px; padding:10px;">
-        <b>Income</b><br>
-        <span style="color:{inc_color}; font-size:1.3rem; font-weight:bold;">Total: ${fmt(total_income)}</span><br>
-        <span style="font-size:0.9rem;">Ordinary: ${fmt(total_ordinary)}</span><br>
-        <span style="font-size:0.9rem;">ROC: ${fmt(total_roc_income)}</span>
-        </div>
-        """,
-        unsafe_allow_html=True
+    # P&L % with color
+    if total_pnl > 0:
+        c5.metric("Total P&L %", f"{total_pnl_pct:+.1f}%", delta=f"{total_pnl_pct:+.1f}%", delta_color="normal")
+    elif total_pnl < 0:
+        c5.metric("Total P&L %", f"{total_pnl_pct:+.1f}%", delta=f"{total_pnl_pct:+.1f}%", delta_color="inverse")
+    else:
+        c5.metric("Total P&L %", f"{total_pnl_pct:+.1f}%")
+
+    # Income box
+    if total_income > 0:
+        income_delta = f"+{fmt(total_income)}"
+        income_color = "normal"
+    elif total_income < 0:
+        income_delta = f"{fmt(total_income)}"
+        income_color = "inverse"
+    else:
+        income_delta = None
+        income_color = "off"
+
+    c6.metric(
+        "Total Income",
+        f"${fmt(total_income)}",
+        delta=f"Ord ${fmt(total_ordinary)} | ROC ${fmt(total_roc_income)}",
+        delta_color=income_color if income_delta else "off"
     )
     c7.metric("Cash", f"${fmt(data.get('cash', 0))}")
 
@@ -591,34 +605,110 @@ elif page == "⚙️ Manage ETFs":
             st.rerun()
 
 # --------------------------
-# REPORTS
+# REPORTS (with AU tax year)
 # --------------------------
 elif page == "📄 Reports":
     st.title("📄 Reports")
+
+    st.write(f"**Report generated:** {datetime.today().strftime('%d %b %Y %H:%M')}")
+
+    report_type = st.radio(
+        "Report period",
+        ["All time", "Australian tax year (1 Jul – 30 Jun)", "Custom date range"],
+        horizontal=True
+    )
+
+    start_date = None
+    end_date = None
+
+    if report_type == "Australian tax year (1 Jul – 30 Jun)":
+        today = date.today()
+        # Current AU tax year: if month >= 7, year starts this year; else starts last year
+        if today.month >= 7:
+            tax_start = date(today.year, 7, 1)
+            tax_end = date(today.year + 1, 6, 30)
+        else:
+            tax_start = date(today.year - 1, 7, 1)
+            tax_end = date(today.year, 6, 30)
+
+        year_options = []
+        for y in range(today.year - 3, today.year + 2):
+            year_options.append(f"{y}-{y+1} (1 Jul {y} → 30 Jun {y+1})")
+
+        # default to current tax year label
+        default_label = f"{tax_start.year}-{tax_end.year} (1 Jul {tax_start.year} → 30 Jun {tax_end.year})"
+        choice = st.selectbox("Select tax year", year_options, index=year_options.index(default_label) if default_label in year_options else 0)
+        # parse years from label
+        start_y = int(choice.split("-")[0])
+        start_date = date(start_y, 7, 1)
+        end_date = date(start_y + 1, 6, 30)
+        st.caption(f"Period: {start_date.strftime('%d %b %Y')} → {end_date.strftime('%d %b %Y')}")
+
+    elif report_type == "Custom date range":
+        col_a, col_b = st.columns(2)
+        with col_a:
+            start_date = st.date_input("From", value=date(date.today().year, 7, 1))
+        with col_b:
+            end_date = st.date_input("To", value=date.today())
+
     if st.button("Generate Report"):
+        # Filter distributions by date if needed
+        filtered_dists = data["distributions"]
+        if start_date and end_date:
+            filtered_dists = []
+            for d in data["distributions"]:
+                dd = parse_date(d.get("date"))
+                if dd and start_date <= dd <= end_date:
+                    filtered_dists.append(d)
+
         report_rows = []
-        for t in data["etfs"]:
+        sum_ordinary = 0.0
+        sum_roc = 0.0
+
+        for t in sorted(data["etfs"]):
+            # position still uses all-time cost basis, but income filtered by period
             p = calculate_position(t, data)
-            if p["shares"] <= 0:
+            if p["shares"] <= 0 and not any(d.get("ticker") == t for d in filtered_dists):
                 continue
-            report_rows.append({
-                "ETF": f"${t}",
-                "Shares": fmt(p["shares"]),
-                "Avg Cost": fmt(p["avg_cost"]),
-                "Total Cost": fmt(p["total_cost"]),
-                "Adjusted Cost (after ROC)": fmt(p["adjusted_cost"]),
-                "ROC Received": fmt(p["roc_total"]),
-                "Ordinary Dividends": fmt(p["ordinary_total"])
-            })
+
+            ordinary = sum(float(d.get("ordinary_amount", 0)) for d in filtered_dists if d.get("ticker") == t)
+            roc = sum(float(d.get("roc_amount", 0)) for d in filtered_dists if d.get("ticker") == t)
+            sum_ordinary += ordinary
+            sum_roc += roc
+
+            if p["shares"] > 0 or ordinary > 0 or roc > 0:
+                report_rows.append({
+                    "ETF": f"${t}",
+                    "Shares": fmt(p["shares"]),
+                    "Avg Cost": fmt(p["avg_cost"]),
+                    "Total Cost": fmt(p["total_cost"]),
+                    "Adjusted Cost (after ROC)": fmt(p["adjusted_cost"]),
+                    "ROC in period": fmt(roc),
+                    "Ordinary in period": fmt(ordinary)
+                })
+
         if report_rows:
             rdf = pd.DataFrame(report_rows)
             st.dataframe(rdf, use_container_width=True)
+
+            st.markdown("---")
+            st.subheader("Totals for selected period")
+            t1, t2, t3 = st.columns(3)
+            t1.metric("Total Ordinary Dividends", f"${fmt(sum_ordinary)}")
+            t2.metric("Total ROC", f"${fmt(sum_roc)}")
+            t3.metric("Total Income (Ord + ROC)", f"${fmt(sum_ordinary + sum_roc)}")
+
+            st.caption(f"Report generated: {datetime.today().strftime('%d %b %Y %H:%M')}")
+            if start_date and end_date:
+                st.caption(f"Period: {start_date.strftime('%d %b %Y')} → {end_date.strftime('%d %b %Y')}")
+
+            csv = rdf.to_csv(index=False).encode()
             st.download_button(
                 "Download CSV",
-                rdf.to_csv(index=False).encode(),
+                csv,
                 f"etf_report_{datetime.today().strftime('%Y%m%d')}.csv",
                 "text/csv"
             )
             st.success("✅ Report generated")
         else:
-            st.warning("No positions found.")
+            st.warning("No data found for this period.")
