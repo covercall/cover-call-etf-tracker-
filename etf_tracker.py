@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import json
 import os
+import hashlib
 from datetime import datetime, date
 import yfinance as yf
 import plotly.express as px
@@ -13,6 +14,8 @@ st.set_page_config(page_title="Covered Call ETF Tracker", page_icon="📈", layo
 
 if "theme" not in st.session_state:
     st.session_state.theme = "Dark"
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
 
 def apply_theme():
     if st.session_state.theme == "Dark":
@@ -49,6 +52,9 @@ def fmt(x):
     except:
         return "—"
 
+def hash_pin(pin: str) -> str:
+    return hashlib.sha256(pin.encode()).hexdigest()
+
 def load_data():
     if os.path.exists(DATA_FILE):
         try:
@@ -56,7 +62,13 @@ def load_data():
                 return json.load(f)
         except:
             pass
-    return {"transactions": [], "distributions": [], "cash": 0.0, "etfs": DEFAULT_ETFS.copy()}
+    return {
+        "transactions": [],
+        "distributions": [],
+        "cash": 0.0,
+        "etfs": DEFAULT_ETFS.copy(),
+        "pin_hash": None
+    }
 
 def save_data(data):
     with open(DATA_FILE, "w") as f:
@@ -115,11 +127,64 @@ def parse_date(d):
         return None
 
 data = load_data()
+if "pin_hash" not in data:
+    data["pin_hash"] = None
 
+# ======================
+# PIN LOCK SCREEN
+# ======================
+if not st.session_state.authenticated:
+    st.title("🔒 ETF Tracker Locked")
+
+    # First time: set PIN
+    if not data.get("pin_hash"):
+        st.subheader("Set your 4-digit PIN")
+        st.caption("This is the first time. Create a PIN to protect your portfolio.")
+        pin1 = st.text_input("Enter 4-digit PIN", type="password", max_chars=4)
+        pin2 = st.text_input("Confirm PIN", type="password", max_chars=4)
+
+        if st.button("Set PIN"):
+            if not pin1.isdigit() or len(pin1) != 4:
+                st.error("PIN must be exactly 4 digits")
+            elif pin1 != pin2:
+                st.error("PINs do not match")
+            else:
+                data["pin_hash"] = hash_pin(pin1)
+                save_data(data)
+                st.session_state.authenticated = True
+                st.success("✅ PIN set successfully")
+                st.rerun()
+    else:
+        # Normal unlock
+        st.subheader("Enter your 4-digit PIN")
+        pin = st.text_input("PIN", type="password", max_chars=4)
+
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("Unlock"):
+                if pin.isdigit() and len(pin) == 4 and hash_pin(pin) == data.get("pin_hash"):
+                    st.session_state.authenticated = True
+                    st.success("✅ Unlocked")
+                    st.rerun()
+                else:
+                    st.error("Wrong PIN")
+        with col2:
+            if st.button("Reset PIN (needs backup restore later)"):
+                st.warning("To reset PIN you must restore a backup that has no PIN, or clear app data. Prefer unlocking with the correct PIN.")
+
+    st.stop()
+
+# ======================
+# APP (only after unlock)
+# ======================
 st.sidebar.title("📊 ETF Tracker")
 theme_choice = st.sidebar.radio("Theme", ["Dark", "Light"], index=0 if st.session_state.theme == "Dark" else 1)
 if theme_choice != st.session_state.theme:
     st.session_state.theme = theme_choice
+    st.rerun()
+
+if st.sidebar.button("🔒 Lock App"):
+    st.session_state.authenticated = False
     st.rerun()
 
 page = st.sidebar.radio("Menu", [
@@ -131,6 +196,7 @@ page = st.sidebar.radio("Menu", [
     "📈 Charts & Projection",
     "💰 Cash",
     "💾 Backup / Restore",
+    "🔐 Change PIN",
     "📰 News",
     "⚙️ Manage ETFs",
     "📄 Reports"
@@ -140,9 +206,30 @@ if st.sidebar.button("🔄 Refresh Prices"):
     st.rerun()
 
 # ======================
+# CHANGE PIN
+# ======================
+if page == "🔐 Change PIN":
+    st.title("🔐 Change PIN")
+    old = st.text_input("Current PIN", type="password", max_chars=4)
+    new1 = st.text_input("New 4-digit PIN", type="password", max_chars=4)
+    new2 = st.text_input("Confirm new PIN", type="password", max_chars=4)
+
+    if st.button("Update PIN"):
+        if not old.isdigit() or hash_pin(old) != data.get("pin_hash"):
+            st.error("Current PIN is wrong")
+        elif not new1.isdigit() or len(new1) != 4:
+            st.error("New PIN must be exactly 4 digits")
+        elif new1 != new2:
+            st.error("New PINs do not match")
+        else:
+            data["pin_hash"] = hash_pin(new1)
+            save_data(data)
+            st.success("✅ PIN updated")
+
+# ======================
 # PORTFOLIO OVERVIEW
 # ======================
-if page == "🏠 Portfolio Overview":
+elif page == "🏠 Portfolio Overview":
     st.title("📊 Portfolio Overview")
 
     overview_rows = []
@@ -211,8 +298,6 @@ if page == "🏠 Portfolio Overview":
     c1.metric("Total Cost (Paid)", f"${fmt(total_cost_sum)}")
     c2.metric("Total Market Value", f"${fmt(total_market_value)}")
     c3.metric("Adjusted Cost (after ROC)", f"${fmt(total_adjusted_cost)}")
-
-    # P&L $ with color (fixed rendering)
     if total_pnl > 0:
         c4.metric("Unrealized P&L $", f"${fmt(total_pnl)}", delta=f"+{fmt(total_pnl)}", delta_color="normal")
     elif total_pnl < 0:
@@ -221,8 +306,6 @@ if page == "🏠 Portfolio Overview":
         c4.metric("Unrealized P&L $", f"${fmt(total_pnl)}")
 
     c5, c6, c7 = st.columns(3)
-
-    # P&L % with color
     if total_pnl > 0:
         c5.metric("Total P&L %", f"{total_pnl_pct:+.1f}%", delta=f"{total_pnl_pct:+.1f}%", delta_color="normal")
     elif total_pnl < 0:
@@ -230,23 +313,10 @@ if page == "🏠 Portfolio Overview":
     else:
         c5.metric("Total P&L %", f"{total_pnl_pct:+.1f}%")
 
-    # Income box
     if total_income > 0:
-        income_delta = f"+{fmt(total_income)}"
-        income_color = "normal"
-    elif total_income < 0:
-        income_delta = f"{fmt(total_income)}"
-        income_color = "inverse"
+        c6.metric("Total Income", f"${fmt(total_income)}", delta=f"Ord ${fmt(total_ordinary)} | ROC ${fmt(total_roc_income)}", delta_color="normal")
     else:
-        income_delta = None
-        income_color = "off"
-
-    c6.metric(
-        "Total Income",
-        f"${fmt(total_income)}",
-        delta=f"Ord ${fmt(total_ordinary)} | ROC ${fmt(total_roc_income)}",
-        delta_color=income_color if income_delta else "off"
-    )
+        c6.metric("Total Income", f"${fmt(total_income)}", delta=f"Ord ${fmt(total_ordinary)} | ROC ${fmt(total_roc_income)}")
     c7.metric("Cash", f"${fmt(data.get('cash', 0))}")
 
 # --------------------------
@@ -262,7 +332,7 @@ elif page == "➕ Add / Edit Positions":
             ticker = st.selectbox("ETF", ticker_options, index=0, format_func=lambda x: "Select ETF..." if x == "" else x)
             shares = st.number_input("Shares", min_value=0.0, step=1.0, format="%.1f", value=0.0)
             price = st.number_input("Price per Share", min_value=0.0, step=0.01, format="%.2f", value=0.0)
-            date = st.date_input("Date", value=datetime.today())
+            date_val = st.date_input("Date", value=datetime.today())
             notes = st.text_input("Notes (optional)", value="")
             if st.form_submit_button("✅ Save Position"):
                 if ticker == "":
@@ -272,7 +342,7 @@ elif page == "➕ Add / Edit Positions":
                     data["transactions"].append({
                         "id": new_id, "ticker": ticker, "type": "BUY",
                         "shares": float(shares), "price": float(price),
-                        "date": str(date), "notes": notes
+                        "date": str(date_val), "notes": notes
                     })
                     save_data(data)
                     st.success(f"✅ Position added! {fmt(shares)} shares of ${ticker} at ${fmt(price)}")
@@ -289,7 +359,7 @@ elif page == "➕ Add / Edit Positions":
                 st.write(f"Current shares of ${ticker}: **{fmt(pos['shares'])}**")
             shares = st.number_input("Shares to Sell", min_value=0.0, step=1.0, format="%.1f", value=0.0, key="sell_shares")
             price = st.number_input("Sell Price", min_value=0.0, step=0.01, format="%.2f", value=0.0, key="sell_price")
-            date = st.date_input("Date", value=datetime.today(), key="sell_date")
+            date_val = st.date_input("Date", value=datetime.today(), key="sell_date")
             notes = st.text_input("Notes (optional)", value="", key="sell_notes")
             if st.form_submit_button("✅ Confirm Sell"):
                 if ticker == "":
@@ -303,7 +373,7 @@ elif page == "➕ Add / Edit Positions":
                         data["transactions"].append({
                             "id": new_id, "ticker": ticker, "type": "SELL",
                             "shares": float(shares), "price": float(price),
-                            "date": str(date), "notes": notes
+                            "date": str(date_val), "notes": notes
                         })
                         save_data(data)
                         st.success(f"✅ Sold {fmt(shares)} shares of ${ticker}")
@@ -605,11 +675,10 @@ elif page == "⚙️ Manage ETFs":
             st.rerun()
 
 # --------------------------
-# REPORTS (with AU tax year)
+# REPORTS
 # --------------------------
 elif page == "📄 Reports":
     st.title("📄 Reports")
-
     st.write(f"**Report generated:** {datetime.today().strftime('%d %b %Y %H:%M')}")
 
     report_type = st.radio(
@@ -623,7 +692,6 @@ elif page == "📄 Reports":
 
     if report_type == "Australian tax year (1 Jul – 30 Jun)":
         today = date.today()
-        # Current AU tax year: if month >= 7, year starts this year; else starts last year
         if today.month >= 7:
             tax_start = date(today.year, 7, 1)
             tax_end = date(today.year + 1, 6, 30)
@@ -631,14 +699,9 @@ elif page == "📄 Reports":
             tax_start = date(today.year - 1, 7, 1)
             tax_end = date(today.year, 6, 30)
 
-        year_options = []
-        for y in range(today.year - 3, today.year + 2):
-            year_options.append(f"{y}-{y+1} (1 Jul {y} → 30 Jun {y+1})")
-
-        # default to current tax year label
+        year_options = [f"{y}-{y+1} (1 Jul {y} → 30 Jun {y+1})" for y in range(today.year - 3, today.year + 2)]
         default_label = f"{tax_start.year}-{tax_end.year} (1 Jul {tax_start.year} → 30 Jun {tax_end.year})"
         choice = st.selectbox("Select tax year", year_options, index=year_options.index(default_label) if default_label in year_options else 0)
-        # parse years from label
         start_y = int(choice.split("-")[0])
         start_date = date(start_y, 7, 1)
         end_date = date(start_y + 1, 6, 30)
@@ -652,7 +715,6 @@ elif page == "📄 Reports":
             end_date = st.date_input("To", value=date.today())
 
     if st.button("Generate Report"):
-        # Filter distributions by date if needed
         filtered_dists = data["distributions"]
         if start_date and end_date:
             filtered_dists = []
@@ -666,11 +728,7 @@ elif page == "📄 Reports":
         sum_roc = 0.0
 
         for t in sorted(data["etfs"]):
-            # position still uses all-time cost basis, but income filtered by period
             p = calculate_position(t, data)
-            if p["shares"] <= 0 and not any(d.get("ticker") == t for d in filtered_dists):
-                continue
-
             ordinary = sum(float(d.get("ordinary_amount", 0)) for d in filtered_dists if d.get("ticker") == t)
             roc = sum(float(d.get("roc_amount", 0)) for d in filtered_dists if d.get("ticker") == t)
             sum_ordinary += ordinary
@@ -690,25 +748,16 @@ elif page == "📄 Reports":
         if report_rows:
             rdf = pd.DataFrame(report_rows)
             st.dataframe(rdf, use_container_width=True)
-
             st.markdown("---")
             st.subheader("Totals for selected period")
             t1, t2, t3 = st.columns(3)
             t1.metric("Total Ordinary Dividends", f"${fmt(sum_ordinary)}")
             t2.metric("Total ROC", f"${fmt(sum_roc)}")
             t3.metric("Total Income (Ord + ROC)", f"${fmt(sum_ordinary + sum_roc)}")
-
             st.caption(f"Report generated: {datetime.today().strftime('%d %b %Y %H:%M')}")
             if start_date and end_date:
                 st.caption(f"Period: {start_date.strftime('%d %b %Y')} → {end_date.strftime('%d %b %Y')}")
-
-            csv = rdf.to_csv(index=False).encode()
-            st.download_button(
-                "Download CSV",
-                csv,
-                f"etf_report_{datetime.today().strftime('%Y%m%d')}.csv",
-                "text/csv"
-            )
+            st.download_button("Download CSV", rdf.to_csv(index=False).encode(), f"etf_report_{datetime.today().strftime('%Y%m%d')}.csv", "text/csv")
             st.success("✅ Report generated")
         else:
             st.warning("No data found for this period.")
